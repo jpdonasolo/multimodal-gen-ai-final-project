@@ -1,0 +1,3 @@
+[submodule "SSV2A"]
+	path = SSV2A
+	url = git@github.com:wguo-ai/SSV2A.git

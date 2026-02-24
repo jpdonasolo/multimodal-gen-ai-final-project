@@ -1,6 +1,7 @@
 #!/bin/bash
 
 OUTPUT="./models"
+YOLO_VERSION="yolo26x"
 
 # Download model weights
 if [ ! -f "$OUTPUT/agg.pth" ]; then
@@ -10,7 +11,10 @@ else
 fi
 
 # Download yolo
-wget -nc https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8x-oiv7.pt -P $OUTPUT
+wget -nc https://github.com/ultralytics/assets/releases/download/v8.4.0/${YOLO_VERSION}.pt -P $OUTPUT
 
 # update config
-sed -i 's|"detection_model": ""|"detection_model": "./yolov8x-oiv7.pt"|' models/ssv2a.json
+SEARCH='"detection_model": ".*"'
+REPLACE="\"detection_model\": \"models/${YOLO_VERSION}.pt\""
+
+sed -i "s|$SEARCH|$REPLACE|" models/ssv2a.json

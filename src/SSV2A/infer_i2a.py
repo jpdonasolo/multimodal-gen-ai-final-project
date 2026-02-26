@@ -18,14 +18,24 @@ if __name__ == '__main__':
     parser.add_argument('--duration', type=int, default=10, help='generation duration in seconds')
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--device', type=str, default='cuda', help='Computation Device')
+    parser.add_argument('--disable', type=str, default="", help='Comma-separated labels to disable, e.g. "dog,bird"')
+    parser.add_argument('--image_path', type=str, default=None, help='Path to a single image')
     args = parser.parse_args()
 
-    images = glob.glob(f'{args.image_dir}/*')
+    disable_labels = set([x.strip().lower() for x in args.disable.split(',') if x.strip()])
+
+    if args.image_path:
+        images = [args.image_path]
+    else:
+        images = []
+        for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+            images += glob.glob(f"{args.image_dir}/{ext}")
+        images = sorted(images)
     image_to_audio(images, text="", transcription="", save_dir=args.out_dir, config=args.cfg,
                    gen_remix=True, gen_tracks=False, emb_only=False,
                    pretrained=args.ckpt, batch_size=args.bs, var_samples=args.var_samples,
                    shuffle_remix=True, cycle_its=args.cycle_its, cycle_samples=args.cycle_samples,
-                   keep_data_cache=False, duration=args.duration, seed=args.seed, device=args.device)
+                   keep_data_cache=False, duration=args.duration, seed=args.seed, device=args.device, disable_labels=disable_labels)
 
 '''
 python infer.py \

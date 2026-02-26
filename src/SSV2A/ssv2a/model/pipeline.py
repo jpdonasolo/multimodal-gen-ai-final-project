@@ -4,6 +4,7 @@ import json
 import os.path
 from pathlib import Path
 from shutil import rmtree
+from PIL import Image, ImageFilter
 
 import numpy as np
 import torch
@@ -195,8 +196,16 @@ def image_to_audio(images, text="", transcription="", save_dir="", config=None,
                    gen_remix=True, gen_tracks=False, emb_only=False,
                    pretrained=None, batch_size=64, var_samples=1,
                    shuffle_remix=True, cycle_its=3, cycle_samples=16, keep_data_cache=False,
-                   duration=10, seed=42, device='cuda'):
+                   duration=10, seed=42, device='cuda', disable_labels=None):
     set_seed(seed)
+    if disable_labels is None:
+        disable_labels = set()
+
+    # allow disable_labels to be: set/list/tuple OR a string like "dog,bird"
+    if isinstance(disable_labels, str):
+        disable_labels = set([x.strip().lower() for x in disable_labels.split(",") if x.strip()])
+    else:
+        disable_labels = set([str(x).strip().lower() for x in disable_labels])
     # revert to default model config if not supplied
     if not os.path.exists(config):
         config = Path().resolve() / 'configs' / 'model.json'
@@ -212,22 +221,85 @@ def image_to_audio(images, text="", transcription="", save_dir="", config=None,
         if gen_tracks:
             os.makedirs(save_dir / 'tracks')
     cache_dir = save_dir / 'data_cache'
+    os.makedirs(cache_dir, exist_ok=True)
 
     # segmentation proposal
     if not isinstance(images, dict):
         local_imgs = detect(images, config['detector'],
                             save_dir=cache_dir / 'masked_images', batch_size=batch_size, device=device)
+        raw_local_imgs = copy.deepcopy(local_imgs)
+        if disable_labels:
+            for img in local_imgs:
+                kept = []
+                for item in local_imgs[img]:
+                    # item is expected to be (path, locality, label, box) now
+                    if len(item) < 3:
+                        kept.append(item)  # unknown label -> keep
+                        continue
+
+                    label = str(item[2]).strip().lower()
+                    if label not in disable_labels:
+                        kept.append(item)
+
+                # IMPORTANT: if everything was disabled, allow empty.
+                # Do NOT re-add the disabled item as a fallback (that defeats disabling).
+                local_imgs[img] = kept
+
+        print("Enabled proposals:")
+        for img in images:
+            labs = [(it[2] if len(it) >= 3 else "unknown") for it in local_imgs[img]]
+            print(Path(img).name, labs)
     else:
         local_imgs = copy.deepcopy(images)
         images = [k for k in images]
         keep_data_cache = True  # prevent deleting nonexistent folder
 
+    def mask_image_for_disabled_labels(img_path, items, disable_labels, out_path):
+        img = Image.open(img_path).convert("RGB")
+        for it in items:
+            if len(it) < 4:
+                continue
+            _, _, label, box = it[0], it[1], it[2], it[3]
+            if str(label).lower() in disable_labels:
+                x1, y1, x2, y2 = [int(v) for v in box]
+                # clamp
+                x1 = max(0, x1); y1 = max(0, y1)
+                x2 = min(img.size[0], x2); y2 = min(img.size[1], y2)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+
+                # blur-fill the region (works better than solid color)
+                region = img.crop((x1, y1, x2, y2)).filter(ImageFilter.GaussianBlur(radius=18))
+                img.paste(region, (x1, y1))
+                # img.paste((0, 0, 0), (x1, y1, x2, y2))
+        img.save(out_path)
+        return out_path
+
     # clip embed
-    global_clips = clip_embed_images(images, batch_size=batch_size, device=device)
+    # build per-image global inputs (masked if needed)
+    global_images = images
+    if disable_labels:
+        os.makedirs(cache_dir / "global_masked", exist_ok=True)
+        global_images = []
+        for img in images:
+            out_img = str((cache_dir / "global_masked" / Path(img).name))
+            mask_image_for_disabled_labels(img, raw_local_imgs[img], disable_labels, out_img)
+            global_images.append(out_img)
+
+    global_clips = clip_embed_images(global_images, batch_size=batch_size, device=device)
+    # if disable_labels:
+    #     # remove global influence completely
+    #     global_clips = torch.zeros_like(global_clips)
     imgs = []
     for img in images:
-        imgs += [li for li, _ in local_imgs[img]]
-    local_clips = clip_embed_images(imgs, batch_size=batch_size, device=device)
+        for item in local_imgs[img]:
+            imgs.append(item[0])  # first element is crop path
+    if len(imgs) > 0:
+        local_clips = clip_embed_images(imgs, batch_size=batch_size, device=device)
+    else:
+        # no local proposals -> create an empty tensor with correct dim on device
+        # clip_dim is config['clip_dim']
+        local_clips = torch.zeros((0, config["clip_dim"]), device=device)
 
     jumps = [len(local_imgs[img]) for img in local_imgs]
 
@@ -269,8 +341,15 @@ def image_to_audio(images, text="", transcription="", save_dir="", config=None,
         local_names = [Path(img).name.replace('.png', '') for img in imgs]
         save_wave(local_wave, save_dir / 'tracks', name=local_names)
     if gen_remix:
-        save_wave(waveform, save_dir,
-                  name=[os.path.basename(img).replace('.png', '') for img in images])
+        suffix = ""
+        if disable_labels:
+            suffix = "__no_" + "_".join(sorted(disable_labels))
+
+        save_wave(
+            waveform,
+            save_dir,
+            name=[f"{Path(img).stem}{suffix}" for img in images]
+        )
     if not keep_data_cache:
         rmtree(cache_dir)
 

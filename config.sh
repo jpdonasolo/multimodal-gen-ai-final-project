@@ -1,7 +1,7 @@
 #!/bin/bash
 
 OUTPUT="./models"
-YOLO_VERSION="yolo26x"
+YOLO_VERSION="yolov8x-oiv7"
 
 # Download model weights
 if [ ! -f "$OUTPUT/agg.pth" ]; then

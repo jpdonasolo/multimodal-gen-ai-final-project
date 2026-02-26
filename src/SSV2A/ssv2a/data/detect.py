@@ -47,6 +47,10 @@ def yolo_detect(images, detection_model='yolov8x-worldv2.pt', segment_model="sam
                 oimg.save(img, 'PNG')
         detect_results = model.predict(images[i:e], imgsz=imgsz, conf=conf, iou=iou, max_det=max_det,
                                        augment=True, verbose=False)
+        for j, r in enumerate(detect_results):
+            cls_ids = r.boxes.cls.cpu().tolist() if r.boxes is not None else []
+            names = [model.names[int(c)] for c in cls_ids]
+            print("Raw YOLO detections for", Path(images[i:e][j]).name, ":", names)
 
         if crop:
             # print("Cropping objects:")
@@ -58,8 +62,11 @@ def yolo_detect(images, detection_model='yolov8x-worldv2.pt', segment_model="sam
                     cimg = oimg.crop(box).resize(imgsz, Image.Resampling.BICUBIC)
                     cimg_file = Path(save_dir) / Path(images[i:e][j]).name.replace('.png', f'_{z}.png')
                     cimg.save(cimg_file, 'PNG')
+                    cls_id = int(r.boxes.cls.cpu().tolist()[0])
+                    label = model.names[cls_id] if hasattr(model, "names") else str(cls_id)
+
                     locality = abs(box[2] - box[0]) * abs(box[3] - box[1]) / img_area  # locality ratio
-                    segments[img].append((str(cimg_file), locality))
+                    segments[img].append((str(cimg_file), locality, label, box))
 
         else:
             # print(f"Segmenting objects with {segment_model}:")
